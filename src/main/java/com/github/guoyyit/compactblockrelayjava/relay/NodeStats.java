@@ -9,6 +9,10 @@ public class NodeStats {
     private final AtomicInteger blocksAccepted = new AtomicInteger();
     private final AtomicInteger compactRebuilt = new AtomicInteger();
     private final AtomicInteger fullBlockFallbacks = new AtomicInteger();
+    private final AtomicInteger blockRequests = new AtomicInteger();
+    private final AtomicInteger fallbackRetries = new AtomicInteger();
+    private final AtomicInteger fallbackExhausted = new AtomicInteger();
+    private final AtomicInteger reacceptedAnnouncements = new AtomicInteger();
     private final AtomicInteger txRequests = new AtomicInteger();
     private final AtomicInteger duplicateAnnouncementsDropped = new AtomicInteger();
     private final AtomicInteger staleAnnouncementsDropped = new AtomicInteger();
@@ -24,6 +28,22 @@ public class NodeStats {
 
     public int fullBlockFallbacks() {
         return fullBlockFallbacks.get();
+    }
+
+    public int blockRequests() {
+        return blockRequests.get();
+    }
+
+    public int fallbackRetries() {
+        return fallbackRetries.get();
+    }
+
+    public int fallbackExhausted() {
+        return fallbackExhausted.get();
+    }
+
+    public int reacceptedAnnouncements() {
+        return reacceptedAnnouncements.get();
     }
 
     public int txRequests() {
@@ -52,6 +72,22 @@ public class NodeStats {
 
     void incFullBlockFallbacks() {
         fullBlockFallbacks.incrementAndGet();
+    }
+
+    void incBlockRequests() {
+        blockRequests.incrementAndGet();
+    }
+
+    void incFallbackRetries() {
+        fallbackRetries.incrementAndGet();
+    }
+
+    void incFallbackExhausted() {
+        fallbackExhausted.incrementAndGet();
+    }
+
+    void incReacceptedAnnouncements() {
+        reacceptedAnnouncements.incrementAndGet();
     }
 
     void incTxRequests() {

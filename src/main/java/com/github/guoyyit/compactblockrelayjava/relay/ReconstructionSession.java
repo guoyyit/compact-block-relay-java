@@ -1,5 +1,6 @@
 package com.github.guoyyit.compactblockrelayjava.relay;
 
+import com.github.guoyyit.compactblockrelayjava.crypto.SipHash;
 import com.github.guoyyit.compactblockrelayjava.model.BlockHeader;
 import com.github.guoyyit.compactblockrelayjava.model.Transaction;
 
@@ -76,13 +77,25 @@ public class ReconstructionSession {
     }
 
     public void fill(int index, Transaction transaction) {
-        if (state == SessionState.IN_PROGRESS) {
+        if (state == SessionState.IN_PROGRESS && slots[index] == null) {
             slots[index] = transaction;
+            requested.remove(index);
         }
     }
 
     public Transaction slot(int index) {
         return slots[index];
+    }
+
+    /**
+     * 新到达交易是否匹配指定未填充槽位：区块头声明的 txid 与短标识必须同时一致。
+     */
+    public boolean matchesUnfilled(int index, Transaction transaction) {
+        if (index < 0 || index >= slots.length || slots[index] != null || transaction == null) {
+            return false;
+        }
+        return header.txids().get(index).equals(transaction.txid())
+                && SipHash.shortId(k0, k1, transaction.txid()) == shortIds.get(index);
     }
 
     /**
@@ -118,6 +131,8 @@ public class ReconstructionSession {
      * 补齐请求超时后释放请求标记，允许重试（受 attempts 上限约束）。
      */
     public void releaseTimedOutRequests() {
+        // 仅释放仍缺失的槽位：在途期间已被本地新交易回填的槽位已由 fill() 移出
+        // requested 集合，因此不会再被任何重试请求包含，同一槽位至多请求一次。
         requested.removeIf(index -> slots[index] == null);
     }
 

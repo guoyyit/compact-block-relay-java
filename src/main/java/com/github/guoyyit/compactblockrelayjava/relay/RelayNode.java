@@ -61,7 +61,9 @@ public class RelayNode implements Peer {
     private long tipHeight = -1;
 
     private final Map<String, ReconstructionSession> sessions = new LinkedHashMap<>();
-    private final Set<String> fallbackRequested = new HashSet<>();
+    private final Map<String, FallbackState> fallbacks = new LinkedHashMap<>();
+    private final Deque<String> exhaustedFallbacks = new ArrayDeque<>();
+    private final Set<String> exhaustedSet = new HashSet<>();
     private final Deque<String> seenBlockHashes = new ArrayDeque<>();
     private final Set<String> seenSet = new HashSet<>();
     private final Deque<AnnounceMessage> orphanAnnounces = new ArrayDeque<>();
@@ -121,8 +123,65 @@ public class RelayNode implements Peer {
         runOnEventLoop(() -> {
             if (isValidTransaction(transaction)) {
                 mempool.add(transaction);
+                fillInProgressSessions(transaction);
             }
         });
+    }
+
+    /**
+     * 新交易到达时，检查全部在途重建会话：txid 与短标识同时匹配的未填充槽位立即填入；
+     * 若该短标识在交易池中存在多个候选（歧义），对应会话回退完整区块。
+     * 同一笔交易可同时填入多个会话，各会话互不影响。
+     */
+    private void fillInProgressSessions(Transaction transaction) {
+        List<ReconstructionSession> activeSessions = new ArrayList<>(sessions.values());
+        List<ReconstructionSession> ambiguousSessions = new ArrayList<>();
+        List<ReconstructionSession> completedSessions = new ArrayList<>();
+        for (ReconstructionSession session : activeSessions) {
+            if (!session.isInProgress()) {
+                continue;
+            }
+            boolean ambiguous = false;
+            boolean matched = false;
+            for (int index = 0; index < session.header().txids().size(); index++) {
+                if (session.slot(index) != null) {
+                    continue;
+                }
+                long shortId = session.shortIds().get(index);
+                // 只评估新交易短标识相关的槽位：其余槽位不受这笔交易影响，
+                // 保持原有的缺失/歧义规则。
+                if (SipHash.shortId(session.k0(), session.k1(), transaction.txid()) != shortId) {
+                    continue;
+                }
+                Set<Transaction> candidates =
+                        mempool.candidates(session.k0(), session.k1(), shortId);
+                if (candidates.size() > 1) {
+                    ambiguous = true;
+                    break;
+                }
+                if (session.matchesUnfilled(index, transaction)) {
+                    session.fill(index, transaction);
+                    matched = true;
+                }
+            }
+            if (ambiguous) {
+                ambiguousSessions.add(session);
+            } else if (matched && session.isComplete()) {
+                completedSessions.add(session);
+            }
+        }
+        for (ReconstructionSession session : ambiguousSessions) {
+            if (session.isInProgress()) {
+                requestFullBlock(session.header().hash(), session.peerId());
+            }
+        }
+        // 所有会话的填充与歧义判定完成后再上链：先完成的会话可能从交易池移除
+        // 被多个区块共享的交易，不能影响其他会话的独立填充。
+        for (ReconstructionSession session : completedSessions) {
+            if (session.isInProgress() && session.isComplete()) {
+                tryComplete(session);
+            }
+        }
     }
 
     public boolean hasBlock(String blockHash) {
@@ -179,8 +238,12 @@ public class RelayNode implements Peer {
             stats.incDuplicateAnnouncementsDropped();
             return;
         }
-        boolean newHash = rememberSeen(header.hash());
-        if (sessions.containsKey(header.hash()) || fallbackRequested.contains(header.hash())
+        boolean reaccepted = exhaustedSet.contains(header.hash());
+        if (reaccepted) {
+            stats.incReacceptedAnnouncements();
+        }
+        boolean newHash = reaccepted || rememberSeen(header.hash());
+        if (sessions.containsKey(header.hash()) || fallbacks.containsKey(header.hash())
                 || isHeldOrphan(header.hash()) || !newHash) {
             stats.incDuplicateAnnouncementsDropped();
             return;
@@ -211,7 +274,7 @@ public class RelayNode implements Peer {
     }
 
     private void beginSession(BlockHeader header, List<Long> shortIds, String peerId, long k0, long k1) {
-        if (fallbackRequested.contains(header.hash())) {
+        if (fallbacks.containsKey(header.hash())) {
             return;
         }
         ReconstructionSession session = new ReconstructionSession(header, shortIds, peerId, k0, k1,
@@ -290,7 +353,7 @@ public class RelayNode implements Peer {
             return;
         }
         terminateSession(block.header().hash());
-        fallbackRequested.remove(block.header().hash());
+        clearFallback(block.header().hash());
         considerBlock(block, message.senderId());
     }
 
@@ -314,8 +377,75 @@ public class RelayNode implements Peer {
             session.abort();
             stats.incFullBlockFallbacks();
         }
-        if (fallbackRequested.add(blockHash)) {
-            network.send(new BlockRequestMessage(id, peerId, blockHash));
+        FallbackState state = fallbacks.get(blockHash);
+        if (state == null) {
+            state = new FallbackState(peerId);
+            fallbacks.put(blockHash, state);
+        }
+        sendBlockRequest(blockHash, state);
+    }
+
+    private void sendBlockRequest(String blockHash, FallbackState state) {
+        exhaustedSet.remove(blockHash);
+        exhaustedFallbacks.removeIf(blockHash::equals);
+        if (state.requestsSent() > 0) {
+            stats.incFallbackRetries();
+        }
+        stats.incBlockRequests();
+        long token = state.requestSent();
+        network.send(new BlockRequestMessage(id, state.peerId(), blockHash));
+        scheduleTimer(() -> onFallbackTimeout(blockHash, token),
+                config.fallbackRequestTimeoutMs());
+    }
+
+    private void onFallbackTimeout(String blockHash, long token) {
+        runOnEventLoop(() -> {
+            FallbackState state = fallbacks.get(blockHash);
+            if (state == null || state.inFlightToken() != token) {
+                return;
+            }
+            if (alreadyAccepted(blockHash)) {
+                clearFallback(blockHash);
+                return;
+            }
+            if (state.requestsSent() <= config.maxFallbackRetries()) {
+                sendBlockRequest(blockHash, state);
+            } else {
+                giveUpFallback(blockHash);
+            }
+        });
+    }
+
+    /**
+     * 回退重试耗尽：释放该区块的全部进行中占位与去重窗口记录，
+     * 使后续重新到达的同一区块通知能重新进入重建或回退流程。
+     */
+    private void giveUpFallback(String blockHash) {
+        terminateSession(blockHash);
+        fallbacks.remove(blockHash);
+        rememberExhausted(blockHash);
+        stats.incFallbackExhausted();
+    }
+
+    private void clearFallback(String blockHash) {
+        fallbacks.remove(blockHash);
+        exhaustedSet.remove(blockHash);
+        exhaustedFallbacks.removeIf(blockHash::equals);
+    }
+
+    /**
+     * 有上界的“回退失败待重新接纳”哈希记录（LRU）。加入时同时将该哈希移出普通
+     * 去重窗口，使下一份通知不被当作重复通知丢弃。
+     */
+    private void rememberExhausted(String blockHash) {
+        seenBlockHashes.removeIf(blockHash::equals);
+        seenSet.remove(blockHash);
+        if (exhaustedSet.add(blockHash)) {
+            exhaustedFallbacks.addLast(blockHash);
+            while (exhaustedFallbacks.size() > config.maxSeenHashes()) {
+                String oldest = exhaustedFallbacks.removeFirst();
+                exhaustedSet.remove(oldest);
+            }
         }
     }
 
@@ -393,7 +523,7 @@ public class RelayNode implements Peer {
         tipHeight = header.height();
         mempool.removeAll(header.txids());
         terminateSession(header.hash());
-        fallbackRequested.remove(header.hash());
+        clearFallback(header.hash());
         stats.incBlocksAccepted();
         propagateAnnouncement(block, receivedFromPeerId);
     }
