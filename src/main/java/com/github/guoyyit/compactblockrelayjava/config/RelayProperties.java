@@ -15,10 +15,13 @@ public class RelayProperties {
     private int maxSeenHashes = 4_096;
     private int maxOrphans = 64;
     private int maxRequestRetries = 1;
+    private long blockRequestTimeoutMs = 1_000;
+    private int maxFallbackRetries = 2;
 
     public RelayConfig toConfig() {
         return new RelayConfig(shortIdBytes, rebuildTimeoutMs, txRequestTimeoutMs,
-                maxMempool, maxSeenHashes, maxOrphans, maxRequestRetries);
+                maxMempool, maxSeenHashes, maxOrphans, maxRequestRetries,
+                blockRequestTimeoutMs, maxFallbackRetries);
     }
 
     public int getShortIdBytes() {
@@ -75,5 +78,21 @@ public class RelayProperties {
 
     public void setMaxRequestRetries(int maxRequestRetries) {
         this.maxRequestRetries = maxRequestRetries;
+    }
+
+    public long getBlockRequestTimeoutMs() {
+        return blockRequestTimeoutMs;
+    }
+
+    public void setBlockRequestTimeoutMs(long blockRequestTimeoutMs) {
+        this.blockRequestTimeoutMs = blockRequestTimeoutMs;
+    }
+
+    public int getMaxFallbackRetries() {
+        return maxFallbackRetries;
+    }
+
+    public void setMaxFallbackRetries(int maxFallbackRetries) {
+        this.maxFallbackRetries = maxFallbackRetries;
     }
 }

@@ -13,6 +13,9 @@ public class NodeStats {
     private final AtomicInteger duplicateAnnouncementsDropped = new AtomicInteger();
     private final AtomicInteger staleAnnouncementsDropped = new AtomicInteger();
     private final AtomicInteger orphansHeld = new AtomicInteger();
+    private final AtomicInteger blockRequests = new AtomicInteger();
+    private final AtomicInteger fallbackRetries = new AtomicInteger();
+    private final AtomicInteger fallbackReadmissions = new AtomicInteger();
 
     public int blocksAccepted() {
         return blocksAccepted.get();
@@ -42,6 +45,18 @@ public class NodeStats {
         return orphansHeld.get();
     }
 
+    public int blockRequests() {
+        return blockRequests.get();
+    }
+
+    public int fallbackRetries() {
+        return fallbackRetries.get();
+    }
+
+    public int fallbackReadmissions() {
+        return fallbackReadmissions.get();
+    }
+
     void incBlocksAccepted() {
         blocksAccepted.incrementAndGet();
     }
@@ -68,5 +83,17 @@ public class NodeStats {
 
     void incOrphansHeld() {
         orphansHeld.incrementAndGet();
+    }
+
+    void incBlockRequests() {
+        blockRequests.incrementAndGet();
+    }
+
+    void incFallbackRetries() {
+        fallbackRetries.incrementAndGet();
+    }
+
+    void incFallbackReadmissions() {
+        fallbackReadmissions.incrementAndGet();
     }
 }

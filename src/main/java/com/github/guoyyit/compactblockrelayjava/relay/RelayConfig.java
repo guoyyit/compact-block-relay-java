@@ -10,6 +10,8 @@ package com.github.guoyyit.compactblockrelayjava.relay;
  * @param maxSeenHashes      已处理/已见区块哈希去重记录上界
  * @param maxOrphans         孤儿通知缓存上界
  * @param maxRequestRetries  补齐请求失败后重试次数，耗尽后回退完整区块
+ * @param blockRequestTimeoutMs 单次完整区块回退请求超时
+ * @param maxFallbackRetries   完整区块回退请求超时后的有限重试次数，耗尽后释放进行中占位
  */
 public record RelayConfig(int shortIdBytes,
                           long rebuildTimeoutMs,
@@ -17,8 +19,24 @@ public record RelayConfig(int shortIdBytes,
                           int maxMempool,
                           int maxSeenHashes,
                           int maxOrphans,
-                          int maxRequestRetries) {
+                          int maxRequestRetries,
+                          long blockRequestTimeoutMs,
+                          int maxFallbackRetries) {
+    /**
+     * 兼容既有调用方：新增回退参数取默认值，不改变既有参数语义。
+     */
+    public RelayConfig(int shortIdBytes,
+                       long rebuildTimeoutMs,
+                       long txRequestTimeoutMs,
+                       int maxMempool,
+                       int maxSeenHashes,
+                       int maxOrphans,
+                       int maxRequestRetries) {
+        this(shortIdBytes, rebuildTimeoutMs, txRequestTimeoutMs, maxMempool, maxSeenHashes,
+                maxOrphans, maxRequestRetries, 1_000, 2);
+    }
+
     public static RelayConfig defaults() {
-        return new RelayConfig(8, 2_000, 500, 10_000, 4_096, 64, 1);
+        return new RelayConfig(8, 2_000, 500, 10_000, 4_096, 64, 1, 1_000, 2);
     }
 }
